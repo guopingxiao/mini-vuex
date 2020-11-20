@@ -1,28 +1,13 @@
 <template>
   <div id="app">
-    <img alt="Vue logo" src="./assets/logo.png">
-    <HelloWorld msg="Welcome to Your Vue.js App"/>
+    我的年龄是: {{this.$store.state.age}}
+    <br />
+    老王的年龄是: {{this.$store.getters.getAge}}
+    <br />
+    <!-- dispatch对应的action -->
+    <button @click="$store.dispatch('changeAge', 3)">过一会增加年龄3</button>
+    <!-- commit 对应的mutation -->
+    <button @click="$store.commit('changeAge', 5)">立即增加年龄5</button>
   </div>
 </template>
 
-<script>
-import HelloWorld from './components/HelloWorld.vue'
-
-export default {
-  name: 'App',
-  components: {
-    HelloWorld
-  }
-}
-</script>
-
-<style>
-#app {
-  font-family: Avenir, Helvetica, Arial, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
-  text-align: center;
-  color: #2c3e50;
-  margin-top: 60px;
-}
-</style>
