@@ -1,5 +1,6 @@
 import Vue from 'vue'
-import Vuex from 'vuex'
+// import Vuex from 'vuex'
+import Vuex from '../mini-vuex/index'
 
 Vue.use(Vuex) // vuex是一个vue插件，内部调用install方法
 
@@ -9,6 +10,7 @@ const store =  new Vuex.Store({
   },
   getters: { // --> computed
     getAge(state) {
+      console.log('getters')
       return state.age + 10;
     }
   },
