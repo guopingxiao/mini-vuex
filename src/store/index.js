@@ -1,6 +1,8 @@
 import Vue from 'vue'
 // import Vuex from 'vuex'
 import Vuex from '../mini-vuex/index'
+import a from './a'
+import b from './b'
 
 Vue.use(Vuex) // vuex是一个vue插件，内部调用install方法
 
@@ -25,6 +27,10 @@ const store =  new Vuex.Store({
         commit('changeAge', payload);
       }, 1000);
     }
+  },
+  modules: {
+    a,
+    b
   }
 })
 
