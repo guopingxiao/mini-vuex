@@ -1,18 +1,18 @@
 import c from './c'
-
 export default {
-  state: {  // --> data 
+  namespaced: true,
+  state: {
     age: 222
   },
-  getters: { // --> computed
+  getters: {
 
   },
-  mutations: { // --> methods 同步更新方法
+  mutations: {
     changeAge(state, payload) {
       state.age += payload
     }
   },
-  actions: { // --> 异步更新state
+  actions: {
 
   },
   modules: {

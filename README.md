@@ -242,3 +242,539 @@ class Store {
 <button @click="$store.commit('aaa', 5)">同步更新</button>
 <button @click="$store.dispatch('aaa', 5)">异步更新</button>
 ```
+
+
+
+### Vuex中的模块搜集
+
+将数据进行格式化，格式化成一颗树
+
+```js
+this._modules = new ModuleCollection(options)  // options 就是 Vuex.Store中传入的参数
+```
+
+```js
+import { forEachValue } from "../util"
+import Module from './module'
+
+class ModuleCollection {
+  constructor(options) {
+    this.register([], options)    // stack = [根对象, a, c]  [根对象, b]  栈结构
+  }
+
+  register(path, rootModule) {
+    let newModule = new Module(rootModule)
+
+    if(path.length == 0) {
+      // 根模块
+      this.root = newModule
+    } else {
+      // [a]
+      // [b]
+      let parent = path.slice(0, -1).reduce((memo, current) => {
+        return memo.getChild(current)   
+      }, this.root)
+      parent.addChild(path[path.length-1], newModule)
+    }
+
+    if(rootModule.modules) {
+      forEachValue(rootModule.modules, (module, moduleName) => {
+        // [a]
+        // [b]
+        this.register(path.concat(moduleName), module)
+      })
+    }
+
+  }
+}
+
+export default ModuleCollection
+```
+
+```js
+import { forEachValue } from "../util"
+
+class Module {
+  constructor(newModule) {
+    this._raw = newModule
+    this._children = {}
+    this.state = newModule.state
+  }
+  getChild(key) {
+    return this._children[key]
+  }
+  addChild(key, module) {
+    this._children[key] = module
+  }
+	......
+}
+
+export default Module
+```
+
+最后我们的转换过程和结果如下：
+
+```js
+{
+	state: {},
+  getters: {},
+  mutations: {},
+  actions: {},
+  modules: {
+    a,    // a里又有模块c
+    b
+  }
+}
+```
+
+转换结果如下
+
+```js
+this.root = {
+  "_raw": "根模块",
+  "_children": {
+    "a": {
+    	"_raw": "a模块",
+      "_children": {
+        "c": {
+          "_raw": "c模块",
+          "_children": {},
+          "state": "c状态"
+        }
+    	},
+			"state": "a状态"
+		},
+    "b": {
+      "_raw": "b模块",
+      "_children": {},
+      "state": "b状态"
+    }
+	},
+	"state": "根模块自己的状态"
+}
+```
+
+
+
+### Vuex中的安装模块
+
+在根模块的状态中，将子模块通过模块名 定义在根模块中
+
+```js
+class Store {
+  constructor(options) {   // options 就是 {state, getters, mutation, actions}
+    const state = options.state    
+    this._actions = {}
+    this._mutations = {}
+    this._wrappedGetters = {}
+    
+    ......
+    installModule(this, state, [], this._modules.root)
+		......
+    
+  }
+}
+```
+
+通过 `installModule` 方法我们来处理 state、getter、mutation、action，
+
+- 将state处理成一层一层的模式
+- getter都处理到一起`store._wrappedGetters`
+- mutation也处理到一起`store._mutations`
+- action也处理到一起`store._actions`
+- 最后再进行递归 执行 `installModule` 方法，对于有子模块的情况，进行递归执行，这样，子模块的state、getter、mutation、action就能合并到根的state、getter、mutation、action上了。
+
+```js
+const installModule = (store, rootState, path, module) => {
+  // 这里我要对当前模块进行操作
+  // 这里我需要遍历当前模块上的 actions、mutation、getters 都把他定义在
+
+  // state
+  // 将所有的子模块的状态安装到父模块的状态上
+  // [a]  [b]          -----》 state
+  if(path.length>0) {   // vuex 可以动态的添加模块
+    let parent = path.slice(0, -1).reduce((memo, current) => {
+      return memo[current]
+    }, rootState)
+    // 如果这个对象 本身不是响应式的 那么 Vue.set 就相当于 
+    Vue.set(parent, path[path.length-1], module.state)
+  }
+
+  // mutation
+  module.forEachMutation((mutation, key) => {
+    store._mutations[key] = store._mutations[key] || []
+    store._mutations[key].push((payload) => {
+      mutation.call(store, module.state, payload)
+    })
+  })
+  // action
+  module.forEachAction((action, key) => {
+    store._actions[key] = store._actions[key] || []
+    store._actions[key].push((payload) => {
+      action.call(store, store, payload)
+    })
+  })
+  // getter
+  module.forEachGetter((getter, key) => {
+    // 模块中 getter的名字重复了 会覆盖
+    store._wrappedGetters[key] = function() {
+      return getter(module.state)
+    }
+  })
+  module.forEachChild((child, key) => {
+    installModule(store, rootState, path.concat(key), child)
+  })
+}
+```
+
+最后整个 store 实例的`state`、`_wrappedGetters`、`_mutations`、`_actions`的属性就变成了合并的结果了， 其中 `_wrappedGetters` 属性会被覆盖，不会有重复，`_mutations`和`_actions`结果是一个数组。如下：
+
+```js
+state = {
+  age: 10,
+  a: {
+    age: 222,
+    c: {
+      age: 444
+    }
+  },
+  b: {
+    age: 333
+  }
+}
+
+this._wrappedGetters = {
+  myAge() {......},
+  myAge2() {}
+}
+
+this._mutations = {
+  changeAge: [fn1, fn2, fn3, fn4],     // 这里的 fn 是同名的情况
+  changeAge1: [xx],
+ 	changeAge2: [xx]   
+}
+
+this._actions = {
+  changeAge: [fn1, xx],
+  changeAge1: [xx]
+}
+```
+
+
+
+### Vuex中的状态
+
+将 state 和 getters 都定义在当前的 vm 上
+
+```js
+class Stroe {
+  constructor() {
+    ......
+    resetStoreVM(this, state)
+    ......
+  }
+  
+  get state() {  // 属性访问器
+    return this._vm._data.$$state   //   虽然 vue 官方 内部 对于 $ 开头的属性不会挂载到 vm 实例上， 但是会挂载到 _data 上，所以，在vm._data 中是能够被访问到的。
+  }
+}
+```
+
+`resetStoreVM`第一个参数是 store 实例，第二个参数是 处理过的整体的 state。通过如下方法，我们可以将state和getters转成了响应式属性，其中需要借用Vue的data和计算属性来做到。这样就会进行依赖收集了，而且计算属性具有缓存效果，所以getters也是。
+
+将 `_wrappedGetters`上的属性和值定义到计算属性上。
+
+现在store 实例上也存在 getters 属性了。
+
+```js
+function resetStoreVM(store, state) {
+  const computed = {};    // 定义计算属性
+  store.getters = {};    // 定义 store 中的 getters
+  
+  forEachValue(store._wrappedGetters, (fn, key) => {
+    computed[key] = () => {
+      return fn()
+    }
+    Object.defineProperty(store.getters, key, {
+      get: () => store._vm[key]    // 去计算属性中取值
+    })
+  })
+
+  store._vm = new Vue({
+    data: {
+      $$state: state,
+    },
+    computed      //计算属性有缓存效果
+  })
+}
+```
+
+```js
+state
+_wrappedGetters
+getters
+_mutations
+_actions
+```
+
+### 命名空间的实现
+
+现在我们要实现Vuex的命名空间，主要是看 module 中的 namespaced 属性。其思想就是对路径的字符串拼接，增加上模块名。给 getters、mutations、actions的key值拼接上模块名。
+
+主要是在初始化store时 的 installModule 方法中进行
+```js
+class Store {
+  constructor() {
+    ......
+    // 2.安装模块
+    installModule(this, state, [], this._modules.root)
+    ......
+  }
+}
+
+```
+```js
+const installModule = (store, rootState, path, module) => {
+  ...
+  // 我要给当前订阅的事件 增加一个命名空间   a/change   b/changge   a/c/change    path [a]  [b]   [a, c]  
+  let namespace = store._modules.getNamespaced(path)      // 返回前缀即可
+  ...
+}
+```
+我们在 ModuleCollection 类中 增加一个方法，用于获取 拼接 namespaced 后的 字符串路径值，然后再将其绑定到 getters、mutations、actions上
+```js
+class ModuleCollection {
+  ...
+  getNamespaced(path) {
+    let root = this.root      //从根模块开始找
+    return path.reduce((str, key) => {
+      root = root.getChild(key)     // 不停的去找当前的模块
+      return str + ( root.namespaced ? key + '/' : '')   // a/c/   c/
+    }, '')    // 参数是一个字符串
+  }
+  ...
+}
+```
+但是注意这里的 `root.namespaced` ，此时因为 root 是进过我们处理过得到的树，我们要先给该root增加上 namespaced 属性，即 Module 类增加上 namespaced 访问器属性
+```js
+class Module {
+  get namespaced() {
+    return !!this._raw.namespaced
+  }
+  ...
+}
+```
+最后 给每个 需要拼接上 命名空间的地方增加上该值，如 `store._mutations[namespace+key]`
+```js
+const installModule = (store, rootState, path, module) => {
+  ...
+  // 我要给当前订阅的事件 增加一个命名空间   a/change   b/changge   a/c/change    path [a]  [b]   [a, c]  
+  let namespace = store._modules.getNamespaced(path)      // 返回前缀即可
+
+  // mutation
+  module.forEachMutation((mutation, key) => {
+    store._mutations[namespace+key] = store._mutations[namespace+key] || []
+    store._mutations[namespace+key].push((payload) => {
+      mutation.call(store, module.state, payload)
+    })
+  })
+  // action
+  module.forEachAction((action, key) => {
+    store._actions[namespace+key] = store._actions[namespace+key] || []
+    store._actions[namespace+key].push((payload) => {
+      action.call(store, store, payload)
+    })
+  })
+  // getter
+  module.forEachGetter((getter, key) => {
+    // 模块中 getter的名字重复了 会覆盖
+    store._wrappedGetters[namespace+key] = function() {
+      return getter(module.state)
+    }
+  })
+}
+```
+
+
+### Vuex插件的实现
+
+先来说明一下Vuex中的插件，Vuex的store接收 `plugins` 选项，这个选项暴露出每次 mutation 的钩子。Vuex插件就是一个函数，它接收 store 作为唯一参数。
+
+```js
+const store = new Vuex.Store({
+  // ...
+  plugins: [myPlugin]
+})
+```
+
+```js
+const myPlugin = store => {
+  // 当 store 初始化后调用
+  store.subscribe((mutation, state) => {
+    // 每次 mutation 之后调用
+    // mutation 的格式为 { type, payload }
+  })
+}
+```
+
+每次执行mutation后都会执行这个监控方法。现在让我们来实现这个功能。
+
+首先我们现在 Vuex.Store上增加 plugins 插件属性， 为这个插件增加一个 persists 方法，该方法的作用就是每次 执行 mutation 后 我们将 state 的值保存到缓存中，让页面刷新后，从缓存中取值，显示的最后一次保存的值，让页面看起来好像有记忆功能一样
+
+```js
+Vuex.Store({
+  plugins: [
+    persists()
+  ]
+})
+```
+
+```js
+function persists() {
+  return function(store) {   // store 是当前默认传递的
+    let data = localStorage.getItem('VUEX:STATE')
+    if(data) {
+      store.replaceState(JSON.parse(data))
+    }
+    store.subscribe((mutation, state) => {
+      localStorage.setItem('VUEX:STATE', JSON.stringify(state))
+    })
+  }
+}
+```
+
+很明显这个实现用到的也是发布订阅模式，具体如下：
+
+```js
+class Store {
+  constructor() {
+    ...
+  	this._subscribes = []
+    ...
+    // Vuex 的插件实现
+    // 插件内部会依次执行
+    options.plugins.forEach(plugin => plugin(this))
+  }
+  ...
+  
+  subscribe = (fn) => {
+    this._subscribes.push(fn)
+  }
+}
+```
+
+初始化执行 `options.plugins.forEach(plugin => plugin(this))` 会执行插件内部定义的插件，将一个个相关的回调存到了  `_subscribes` 中，等执行 mutation 时，执行该数组中的所有方法，所以就想一个监听函数一样
+
+```js
+// mutation
+  module.forEachMutation((mutation, key) => {
+    ...
+    store._mutations[namespace+key].push((payload) => {
+      ...
+      store._subscribes.forEach(fn => {   // 关键部分
+        fn(mutation, store.state)
+      })
+    })
+  })
+```
+
+当 `commit` 时，会触发`_mutations` 中的所有方法，在这些方法内部我们会调用之前绑定到 `_subscribes` 上的方法，这些方法接收两个参数 `mutation`, `state`，所以就执行了方法内部的 `localStorage.setItem('VUEX:STATE', JSON.stringify(state))` 语句了。
+
+接下来我们再来说一下插件中定义的 `store.replaceState(JSON.parse(data))` 方法，作用是当刷新页面时从缓存中获取数据，state回到最后一次的效果，好像记忆功能一样
+
+```js
+class Store {
+  ...
+  replaceState(state) {
+    // 替换掉最新的状态
+    this._vm._data.$$state = state
+  }
+}
+```
+
+这样 state 就重新赋值了，但是这里有一个问题，因为是覆盖的原因，那么Store 中原本的 state 就是旧的了，如果我们不进行修改的话，那么每次更新页面将不会更新，因为 state 还是旧的state，所以我们定义一个方法，用于返回每个module 的新的 state
+
+```js
+function getState(store, path) {    // 获取最新的状态
+  return path.reduce((newState, current) => {
+    return newState[current]
+  }, store.state)
+}
+```
+
+```js
+const installModule = (store, rootState, path, module) => {
+  ...
+  module.forEachMutation((mutation, key) => {
+    ...
+    store._mutations[namespace+key].push((payload) => {
+      ...
+      mutation.call(store, getState(store, path), payload)   // 每次传给mutation 方法的state参数是新的state
+      ...
+    })
+  })
+  ...
+  // getter
+  module.forEachGetter((getter, key) => {
+    store._wrappedGetters[namespace+key] = function() {
+      return getter(getState(store, path))   // getters 的 state 参数也一样
+    }
+  })
+    ...
+}
+  
+```
+
+
+
+### 辅助函数
+
+
+
+```js
+import { mapState, mapGetters } from './vuex'
+
+export default {
+  name: 'app',
+  computed: {
+    ...mapState(['age']),
+    ...mapGetters(['myAge'])
+  },
+  methods: {
+
+  }
+}
+```
+
+```js
+// helpers.js
+
+export function mapState(stateArr) {
+  let obj = {}
+  stateArr.forEach(key => {
+    obj[key] = function() {
+      return this.$store.state[key]
+    }
+  })
+  return obj
+}
+
+export function mapGetters(gettersArr) {
+  let obj = {}
+  gettersArr.forEach(key => {
+    obj[key] = function() {
+      return this.$store.getters[key]
+    }
+  })
+  return obj
+}
+```
+
+```js
+// vuex/index.js
+
+...
+
+export * from './helpers'
+
+```
